@@ -24,6 +24,8 @@ import cv2
 import numpy as np
 import requests
 
+from .cloudinary_service import resolve_photo_path
+
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
@@ -194,11 +196,18 @@ def find_best_match(
     best_confidence: float = 0.0
 
     for emp_db_id, passport_path in employee_passport_pairs:
-        if not passport_path or not os.path.exists(passport_path):
-            logger.warning("Passport photo missing for employee db_id=%s", emp_db_id)
+        if not passport_path:
+            logger.warning("No passport path for employee db_id=%s — skipping.", emp_db_id)
             continue
 
-        is_match, confidence = verify_faces(capture_path, passport_path)
+        try:
+            with resolve_photo_path(passport_path) as local_path:
+                is_match, confidence = verify_faces(capture_path, local_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Could not resolve passport for employee db_id=%s: %s", emp_db_id, exc
+            )
+            continue
 
         if is_match and confidence > best_confidence:
             best_confidence = confidence

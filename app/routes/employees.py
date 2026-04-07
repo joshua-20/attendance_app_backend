@@ -1,6 +1,7 @@
 import os
 import uuid
 import logging
+import tempfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
@@ -10,6 +11,12 @@ from ..database import get_db
 from ..models import Employee
 from ..schemas import EmployeeResponse
 from ..services.face_service import validate_face_in_image
+from ..services.cloudinary_service import (
+    CLOUDINARY_ENABLED,
+    upload_passport,
+    delete_photo,
+    is_remote_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +38,45 @@ def _validate_image_upload(file: UploadFile) -> None:
         )
 
 
-def _save_upload(content: bytes, directory: str) -> tuple[str, str]:
-    """Persist uploaded bytes to disk and return (safe_filename, full_path)."""
+def _save_local(content: bytes, directory: str) -> str:
+    """Persist bytes to a local directory and return the full path."""
     os.makedirs(directory, exist_ok=True)
-    safe_filename = f"{uuid.uuid4().hex}.jpg"
-    full_path = os.path.join(directory, safe_filename)
+    full_path = os.path.join(directory, f"{uuid.uuid4().hex}.jpg")
     with open(full_path, "wb") as fp:
         fp.write(content)
-    return safe_filename, full_path
+    return full_path
+
+
+def _store_passport(content: bytes, employee_id: str) -> tuple[str, str | None]:
+    """
+    Persist a passport photo and return ``(stored_path, temp_path)``.
+
+    * When Cloudinary is enabled the photo is uploaded to Cloudinary and
+      ``stored_path`` is the ``secure_url``.  ``temp_path`` is a temporary
+      local file that was used for face-validation; the caller must delete it.
+    * When Cloudinary is disabled the photo is saved to local PASSPORT_DIR and
+      ``stored_path`` is the local filesystem path.  ``temp_path`` is None.
+    """
+    if CLOUDINARY_ENABLED:
+        # Write to temp file first so face_service can validate it
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        cloudinary_url = upload_passport(content, employee_id)
+        return cloudinary_url, tmp_path
+    else:
+        local_path = _save_local(content, PASSPORT_DIR)
+        return local_path, None
+
+
+def _remove_passport(stored_path: str) -> None:
+    """Delete a passport photo from Cloudinary or local disk."""
+    if not stored_path:
+        return
+    if is_remote_url(stored_path):
+        delete_photo(stored_path)
+    elif os.path.exists(stored_path):
+        os.remove(stored_path)
 
 
 # ---------------------------------------------------------------------------
@@ -76,15 +114,23 @@ async def register_employee(
             detail="Passport photo exceeds the 10 MB size limit.",
         )
 
-    _, passport_path = _save_upload(content, PASSPORT_DIR)
+    stored_path, tmp_path = _store_passport(content, employee_id)
 
-    # Ensure the photo contains a face before committing to the database
-    if not validate_face_in_image(passport_path):
-        os.remove(passport_path)
+    # Validate face using temp file (Cloudinary) or the stored local file
+    validation_path = tmp_path if tmp_path else stored_path
+    if not validate_face_in_image(validation_path):
+        # Clean up both temp and cloud/local copies on failure
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        _remove_passport(stored_path)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="No face detected in the uploaded passport photo. Please upload a clear face photo.",
         )
+
+    # Temp file no longer needed after validation
+    if tmp_path and os.path.exists(tmp_path):
+        os.remove(tmp_path)
 
     employee = Employee(
         employee_id=employee_id,
@@ -92,12 +138,15 @@ async def register_employee(
         email=email,
         department=department,
         role=role,
-        passport_photo_path=passport_path,
+        passport_photo_path=stored_path,
     )
     db.add(employee)
     db.commit()
     db.refresh(employee)
-    logger.info("Registered employee '%s' (id=%s)", name, employee_id)
+    logger.info(
+        "Registered employee '%s' (id=%s) — photo stored at %s",
+        name, employee_id, "Cloudinary" if CLOUDINARY_ENABLED else stored_path,
+    )
     return employee
 
 
@@ -154,21 +203,25 @@ async def update_passport_photo(
             detail="Photo exceeds 10 MB size limit.",
         )
 
-    _, new_path = _save_upload(content, PASSPORT_DIR)
+    new_stored_path, tmp_path = _store_passport(content, employee_id)
 
-    if not validate_face_in_image(new_path):
-        os.remove(new_path)
+    validation_path = tmp_path if tmp_path else new_stored_path
+    if not validate_face_in_image(validation_path):
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        _remove_passport(new_stored_path)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="No face detected in the uploaded photo.",
         )
 
-    # Remove the old passport photo from disk
-    old_path = employee.passport_photo_path
-    if old_path and os.path.exists(old_path):
-        os.remove(old_path)
+    if tmp_path and os.path.exists(tmp_path):
+        os.remove(tmp_path)
 
-    employee.passport_photo_path = new_path
+    # Remove the old passport photo
+    _remove_passport(employee.passport_photo_path or "")
+
+    employee.passport_photo_path = new_stored_path
     db.commit()
     db.refresh(employee)
     return employee
@@ -187,8 +240,7 @@ def delete_employee(employee_id: str, db: Session = Depends(get_db)):
             detail=f"Employee '{employee_id}' not found.",
         )
 
-    if employee.passport_photo_path and os.path.exists(employee.passport_photo_path):
-        os.remove(employee.passport_photo_path)
+    _remove_passport(employee.passport_photo_path or "")
 
     db.delete(employee)
     db.commit()
