@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Environment
+.env
+
+# Database
+*.db
+*.sqlite3
+
+# Uploaded files (do not commit real photos)
+uploads/passports/*
+uploads/captures/*
+!uploads/passports/.gitkeep
+!uploads/captures/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+
+# DeepFace weights cache
+.deepface/
