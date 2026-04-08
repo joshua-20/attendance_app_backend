@@ -25,3 +25,6 @@ uploads/captures/*
 
 # DeepFace weights cache
 .deepface/
+
+
+test_live.py

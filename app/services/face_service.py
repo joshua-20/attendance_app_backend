@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 # --------------------------------------------------------------------------- #
 COSINE_THRESHOLD = float(os.getenv("FACE_COSINE_THRESHOLD", "0.363"))
+DETECT_THRESHOLD = float(os.getenv("FACE_DETECT_THRESHOLD", "0.6"))
 MODELS_DIR = Path(os.getenv("FACE_MODELS_DIR", Path(__file__).parent.parent.parent / "models"))
 
 _DETECTOR_MODEL_URL = (
@@ -81,7 +82,7 @@ def _load_models() -> tuple[cv2.FaceDetectorYN, cv2.FaceRecognizerSF]:
         str(_DETECTOR_FILE),
         config="",
         input_size=(320, 320),
-        score_threshold=0.9,
+        score_threshold=DETECT_THRESHOLD,
         nms_threshold=0.3,
         top_k=5000,
     )
