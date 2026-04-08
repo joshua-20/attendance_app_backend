@@ -63,10 +63,16 @@ async def check_in(
     4. On match → record check-in (or check-out if already checked in today).
     5. Return the matched employee details and attendance record.
     """
+    logger.info("CHECK-IN REQUEST  file=%s  size_bytes=%s", face_capture.filename, "unknown")
+
     _validate_image_upload(face_capture)
 
     content = await face_capture.read()
+    file_kb = len(content) / 1024
+    logger.info("CHECK-IN IMAGE RECEIVED  size=%.1f KB", file_kb)
+
     if len(content) > MAX_FILE_BYTES:
+        logger.warning("CHECK-IN REJECTED  reason=file_too_large  size=%.1f KB", file_kb)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded image exceeds 10 MB.",
@@ -77,6 +83,7 @@ async def check_in(
     # --- Face presence check ---
     if not validate_face_in_image(capture_path):
         os.remove(capture_path)
+        logger.warning("CHECK-IN REJECTED  reason=no_face_detected")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="No face detected in the captured image. Please retake the photo.",
@@ -85,6 +92,7 @@ async def check_in(
     # --- Multiple-face check (security: only one person may check in at a time) ---
     if count_faces_in_image(capture_path) > 1:
         os.remove(capture_path)
+        logger.warning("CHECK-IN REJECTED  reason=multiple_faces_detected")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Multiple faces detected. Ensure only one person is visible.",
@@ -96,6 +104,7 @@ async def check_in(
     )
     if not employees:
         os.remove(capture_path)
+        logger.warning("CHECK-IN REJECTED  reason=no_registered_employees")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No employee records with passport photos found.",
@@ -108,7 +117,10 @@ async def check_in(
 
     if not match_result:
         # Keep the capture for audit purposes even on failed match
-        logger.info("Face capture saved at %s — no match found.", capture_path)
+        logger.warning(
+            "CHECK-IN FAILED  reason=face_not_recognised  capture=%s",
+            capture_path,
+        )
         return FaceVerificationResponse(
             success=False,
             message="Face not recognised. Access denied.",
@@ -135,6 +147,17 @@ async def check_in(
             existing.capture_photo_path = capture_path
             db.commit()
             db.refresh(existing)
+            logger.info(
+                "CHECK-OUT SUCCESS  employee_id=%s  name=%s  department=%s  role=%s  "
+                "check_in=%s  check_out=%s  confidence=%.4f",
+                matched_employee.employee_id,
+                matched_employee.name.strip(),
+                getattr(matched_employee, 'department', 'N/A'),
+                getattr(matched_employee, 'role', 'N/A'),
+                existing.check_in_time,
+                existing.check_out_time,
+                confidence,
+            )
             return FaceVerificationResponse(
                 success=True,
                 message=f"Check-out recorded for {matched_employee.name}.",
@@ -143,6 +166,11 @@ async def check_in(
                 confidence_score=round(confidence, 4),
             )
         else:
+            logger.info(
+                "CHECK-IN SKIPPED  reason=already_completed_today  employee_id=%s  name=%s",
+                matched_employee.employee_id,
+                matched_employee.name.strip(),
+            )
             return FaceVerificationResponse(
                 success=True,
                 message=f"{matched_employee.name} has already completed attendance for today.",
@@ -164,8 +192,13 @@ async def check_in(
     db.commit()
     db.refresh(attendance)
     logger.info(
-        "Check-in: employee=%s confidence=%.4f",
+        "CHECK-IN SUCCESS  employee_id=%s  name=%s  department=%s  role=%s  "
+        "check_in=%s  confidence=%.4f",
         matched_employee.employee_id,
+        matched_employee.name.strip(),
+        getattr(matched_employee, 'department', 'N/A'),
+        getattr(matched_employee, 'role', 'N/A'),
+        attendance.check_in_time,
         confidence,
     )
     return FaceVerificationResponse(
