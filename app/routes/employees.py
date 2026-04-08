@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
+from ..auth import require_admin
 from ..database import get_db
-from ..models import Employee
+from ..models import Admin, Employee
 from ..schemas import EmployeeResponse
 from ..services.face_service import validate_face_in_image
 from ..services.cloudinary_service import (
@@ -91,6 +92,7 @@ async def register_employee(
     role: Optional[str] = Form(None),
     passport_photo: UploadFile = File(..., description="Clear passport-style face photo"),
     db: Session = Depends(get_db),
+    _admin: Admin = Depends(require_admin),
 ):
     """
     Register a new employee and store their passport photo.
@@ -158,6 +160,7 @@ def list_employees(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
+    _admin: Admin = Depends(require_admin),
 ):
     """Return a paginated list of all registered employees."""
     return db.query(Employee).offset(skip).limit(limit).all()
@@ -167,7 +170,7 @@ def list_employees(
 # GET /api/employees/{employee_id}
 # ---------------------------------------------------------------------------
 @router.get("/{employee_id}", response_model=EmployeeResponse)
-def get_employee(employee_id: str, db: Session = Depends(get_db)):
+def get_employee(employee_id: str, db: Session = Depends(get_db), _admin: Admin = Depends(require_admin)):
     """Fetch a single employee by their employee_id string."""
     employee = db.query(Employee).filter(Employee.employee_id == employee_id).first()
     if not employee:
@@ -186,6 +189,7 @@ async def update_passport_photo(
     employee_id: str,
     passport_photo: UploadFile = File(...),
     db: Session = Depends(get_db),
+    _admin: Admin = Depends(require_admin),
 ):
     """Replace an employee's stored passport photo."""
     employee = db.query(Employee).filter(Employee.employee_id == employee_id).first()
@@ -231,7 +235,7 @@ async def update_passport_photo(
 # DELETE /api/employees/{employee_id}
 # ---------------------------------------------------------------------------
 @router.delete("/{employee_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_employee(employee_id: str, db: Session = Depends(get_db)):
+def delete_employee(employee_id: str, db: Session = Depends(get_db), _admin: Admin = Depends(require_admin)):
     """Remove an employee and their associated passport photo."""
     employee = db.query(Employee).filter(Employee.employee_id == employee_id).first()
     if not employee:

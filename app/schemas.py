@@ -3,6 +3,26 @@ from typing import Optional
 from pydantic import BaseModel, EmailStr, field_validator
 
 
+# ---------------------------------------------------------------------------
+# Auth schemas
+# ---------------------------------------------------------------------------
+
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    admin_id: int
+    username: str
+
+class AdminCreate(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+
+
 # --- Employee schemas ---
 
 class EmployeeBase(BaseModel):
@@ -34,6 +54,11 @@ class AttendanceResponse(BaseModel):
     employee: EmployeeResponse
 
     model_config = {"from_attributes": True}
+
+
+class AttendancePeriod(BaseModel):
+    """Query helper — not a DB model."""
+    period: str = "today"   # "today" | "week" | "month"
 
 
 # --- Face verification response ---

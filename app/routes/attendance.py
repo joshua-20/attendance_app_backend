@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
+from ..auth import require_admin
 from ..database import get_db
-from ..models import Attendance, Employee
+from ..models import Admin, Attendance, Employee
 from ..schemas import AttendanceResponse, FaceVerificationResponse
 from ..services.face_service import count_faces_in_image, find_best_match, validate_face_in_image
 
@@ -214,13 +215,59 @@ async def check_in(
 # GET /api/attendance/today
 # ---------------------------------------------------------------------------
 @router.get("/today", response_model=List[AttendanceResponse])
-def today_attendance(db: Session = Depends(get_db)):
-    """Return all attendance records for the current date."""
+def today_attendance(
+    db: Session = Depends(get_db),
+    _admin: Admin = Depends(require_admin),
+):
+    """Return all attendance records for the current date. (Admin only)"""
     today = datetime.date.today()
     return (
         db.query(Attendance)
         .filter(Attendance.date == today)
         .order_by(Attendance.check_in_time)
+        .all()
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/attendance/records?period=today|week|month
+# ---------------------------------------------------------------------------
+@router.get("/records", response_model=List[AttendanceResponse])
+def attendance_records(
+    period: str = "today",
+    employee_id: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    _admin: Admin = Depends(require_admin),
+):
+    """
+    Return attendance records filtered by period. (Admin only)
+
+    period: "today" | "week" | "month"
+    """
+    today = datetime.date.today()
+    if period == "week":
+        # ISO week: Monday to today
+        start = today - datetime.timedelta(days=today.weekday())
+    elif period == "month":
+        start = today.replace(day=1)
+    else:  # default: today
+        start = today
+
+    query = db.query(Attendance).filter(Attendance.date >= start, Attendance.date <= today)
+
+    if employee_id:
+        emp = db.query(Employee).filter(Employee.employee_id == employee_id).first()
+        if emp:
+            query = query.filter(Attendance.employee_id == emp.id)
+        else:
+            return []
+
+    return (
+        query.order_by(Attendance.date.desc(), Attendance.check_in_time.desc())
+        .offset(skip)
+        .limit(limit)
         .all()
     )
 
@@ -235,6 +282,7 @@ def list_attendance(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
+    _admin: Admin = Depends(require_admin),
 ):
     """
     Return a paginated list of attendance records.
@@ -268,7 +316,11 @@ def list_attendance(
 # GET /api/attendance/{attendance_id}
 # ---------------------------------------------------------------------------
 @router.get("/{attendance_id}", response_model=AttendanceResponse)
-def get_attendance_record(attendance_id: int, db: Session = Depends(get_db)):
+def get_attendance_record(
+    attendance_id: int,
+    db: Session = Depends(get_db),
+    _admin: Admin = Depends(require_admin),
+):
     """Fetch a single attendance record by its numeric ID."""
     record = db.query(Attendance).filter(Attendance.id == attendance_id).first()
     if not record:

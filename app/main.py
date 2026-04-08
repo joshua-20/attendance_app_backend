@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .database import Base, engine
-from .routes import attendance, employees
+from .routes import attendance, employees, auth
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,6 +66,7 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
+app.include_router(auth.router)
 app.include_router(employees.router)
 app.include_router(attendance.router)
 
